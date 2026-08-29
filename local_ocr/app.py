@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""CPU 기반 완전 로컬 OCR 프로그램 - Stage 1(입력·기본 OCR) CLI 진입점.
+"""CPU 기반 완전 로컬 OCR 프로그램 - Stage 1~3 CLI 진입점.
 
-파일 로딩, PDF 텍스트 레이어 판별, 문서/줄 방향 보정(PaddleOCR 내장),
-기본 한국어 인식 모델 실행까지 수행해 TXT·JSON 결과를 생성한다.
-손글씨 Fine-tuning, Tesseract 교차 판독, 검토 GUI, Windows 패키징은
-이후 단계(Stage 3~8)에서 추가된다.
+파일 로딩, PDF 텍스트 레이어 판별, 문서/줄 방향 보정(PaddleOCR 내장), 기본
+한국어 인식(Stage 1), 불확실한 Crop의 전처리 보정본 재판독(Stage 2), Paddle
+과 Tesseract 교차 판독을 통한 자동 확정/사용자 확인/판독 불가 판정(Stage 3)
+까지 수행해 TXT·JSON 결과를 생성한다. 손글씨 Fine-tuning, 검토 GUI, Windows
+패키징은 이후 단계(Stage 4~8)에서 추가된다.
 
 Usage:
     python app.py <input-file-or-dir> [--output-dir output] [--dpi 300]
-                  [--mode accuracy|speed] [--lang korean]
+                  [--mode accuracy|speed] [--lang korean] [--no-cross-check]
 """
 
 from __future__ import annotations
@@ -29,11 +30,14 @@ from common.config import (  # noqa: E402
 )
 from common.confidence import classify_status  # noqa: E402
 from common.types import BBox, DocumentResult, PageResult, TextLine  # noqa: E402
-from ensemble.reprocess import pick_best, reprocess_crop  # noqa: E402
+from ensemble.cross_check import cross_check_texts  # noqa: E402
+from ensemble.reprocess import best_item, pick_best, reprocess_crop  # noqa: E402
 from input.loader import load_document  # noqa: E402
 from preprocess.convert import to_bgr_ndarray  # noqa: E402
 from preprocess.crop import crop_with_padding  # noqa: E402
+from recognition.base import OCREngine  # noqa: E402
 from recognition.paddle_engine import PaddleOCREngine  # noqa: E402
+from recognition.tesseract_engine import TesseractEngine  # noqa: E402
 from spacing.reading_order import join_text  # noqa: E402
 from storage.writer import save_json, save_txt  # noqa: E402
 
@@ -41,11 +45,17 @@ SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_PDF_EXTENSIONS
 
 
 def run_pipeline(
-    path: str | Path, config: PipelineConfig, engine: PaddleOCREngine
+    path: str | Path,
+    config: PipelineConfig,
+    engine: PaddleOCREngine,
+    tesseract_engine: OCREngine | None = None,
 ) -> DocumentResult:
-    """문서 "처리 파이프라인" 1~2, 5~9, 11~12번 항목: 로딩, 기본 인식, 불확실한
-    Crop 재판독(Stage 2)부터 TXT/JSON용 DocumentResult 구성까지. (3~4번 기하
-    보정 조건부 적용, 10번 판독 불가/공간 검증은 Stage 3~5에서 추가된다.)
+    """문서 "처리 파이프라인" 1~9, 11~12번 항목: 로딩, 기본 인식, 불확실한 Crop
+    재판독(Stage 2), Paddle-Tesseract 교차 판독(Stage 3)부터 TXT/JSON용
+    DocumentResult 구성까지. (3~4번 기하 보정 조건부 적용은 Stage 2 변형
+    생성기에서 다루고, 10번 공간 검증은 Stage 5에서 추가된다.)
+
+    `tesseract_engine`을 넘기지 않으면 Stage 2까지만 동작한다(교차 판독 생략).
     """
     loaded_pages = load_document(
         path, dpi=config.dpi, min_text_layer_chars=config.min_text_layer_chars
@@ -75,6 +85,7 @@ def run_pipeline(
                         text=item.text,
                         confidence=item.confidence,
                         engine=engine,
+                        tesseract_engine=tesseract_engine,
                         config=config,
                     )
                 )
@@ -97,14 +108,22 @@ def _build_text_line(
     text: str,
     confidence: float,
     engine: PaddleOCREngine,
+    tesseract_engine: OCREngine | None,
     config: PipelineConfig,
 ) -> TextLine:
-    """1차 인식 결과로 TextLine을 만들되, confidence가 낮으면 Stage 2 재판독을 거친다.
+    """1차 인식 결과로 TextLine을 만들되, confidence가 낮으면 Stage 2 재판독,
+    이어서 Stage 3 교차 판독을 거친다.
 
     Stage 2 재판독은 1차 인식이 본 전체 영역이 아니라 그 안의 좁은 Crop만 다시
     보므로, `reprocess_crop`의 "original"(보정 없는 Crop) 결과조차 1차 인식과
     다른 입력에 대한 새로운 시도다 — 그래서 1차 인식값을 덮어쓰지 않고 별도
     후보(`paddle_print_crop`)로 남긴다.
+
+    Stage 2만으로 confidence가 자동 확정 임계값을 넘기더라도, 문서 "신뢰도와
+    판독 불가 정책"의 자동 확정 조건은 "복수 모델 일치"이지 confidence 하나가
+    아니다 — 그래서 1차 인식이 이미 확신할 때만(re-processing 없이) 곧바로
+    반환하고, 그 밖의 모든 경우는 (가능하면) Tesseract와 교차 검증한 뒤에야
+    상태를 최종 확정한다.
     """
     base_source = "paddle_print"
     status = classify_status(confidence, config)
@@ -140,6 +159,18 @@ def _build_text_line(
         source = f"{base_source}_{suffix}"
         status = classify_status(confidence, config)
 
+    if tesseract_engine is not None:
+        cross_check_image = best.image if best is not None else crop
+        tesseract_item = best_item(tesseract_engine, cross_check_image)
+        if tesseract_item is not None:
+            candidates["tesseract"] = (tesseract_item.text, round(tesseract_item.confidence, 4))
+            result = cross_check_texts(text, tesseract_item.text)
+            text, status = result.text, result.status
+            if status == "auto_confirmed":
+                confidence = max(confidence, tesseract_item.confidence)
+                source = base_source  # 교차 확정된 값은 Paddle 표기를 대표로 쓴다
+        # tesseract_item이 None이면(아무것도 못 읽음) Stage 2 결과를 그대로 둔다.
+
     return TextLine(
         page=page,
         bbox=page_bbox,
@@ -168,9 +199,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["accuracy", "speed"],
         default="accuracy",
-        help="Stage 1은 단일 엔진만 사용하므로 현재는 두 모드 동작이 동일하다 (Stage 3부터 분기).",
+        help="손글씨 Fine-tuning 모델(Stage 4)이 아직 없어 현재는 두 모드 동작이 동일하다.",
     )
     parser.add_argument("--lang", default="korean")
+    parser.add_argument(
+        "--no-cross-check",
+        action="store_true",
+        help="Stage 3 Tesseract 교차 판독을 건너뛴다 (Tesseract 미설치 환경 등).",
+    )
     return parser
 
 
@@ -182,16 +218,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"처리할 파일을 찾지 못했습니다: {args.input}", file=sys.stderr)
         return 1
 
-    config = PipelineConfig(mode=args.mode, lang=args.lang, dpi=args.dpi)
+    config = PipelineConfig(
+        mode=args.mode, lang=args.lang, dpi=args.dpi, enable_cross_check=not args.no_cross_check
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     print("PaddleOCR 엔진 초기화 중 (최초 실행 시 모델 다운로드로 시간이 걸릴 수 있습니다)...")
     engine = PaddleOCREngine(config)
 
+    tesseract_engine: OCREngine | None = None
+    if config.enable_cross_check:
+        tesseract_engine = TesseractEngine(lang=config.tesseract_lang, dpi=config.dpi)
+
     for input_path in inputs:
         start = time.monotonic()
         print(f"[처리 중] {input_path}")
-        doc = run_pipeline(input_path, config, engine=engine)
+        doc = run_pipeline(input_path, config, engine=engine, tesseract_engine=tesseract_engine)
 
         stem = input_path.stem
         txt_path = args.output_dir / f"{stem}.txt"

@@ -51,6 +51,12 @@ class PipelineConfig:
     auto_confirm_threshold: float = DEFAULT_AUTO_CONFIRM_THRESHOLD
     review_threshold: float = DEFAULT_REVIEW_THRESHOLD
 
+    # Stage 3: Paddle 결과가 불확실할 때 Tesseract로 교차 판독할지 여부.
+    # 문서 "모델 선택 근거": Tesseract는 보조 엔진이므로 끌 수 있게 둔다
+    # (Tesseract 미설치 환경에서 개발/테스트할 때 유용).
+    enable_cross_check: bool = True
+    tesseract_lang: str = "kor+eng"
+
     # 문서 "CPU 성능 최적화": GPU 불필요, 실제 코어 수 기반 스레드 제한.
     use_gpu: bool = False
     cpu_threads: int | None = None

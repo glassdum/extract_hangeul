@@ -70,6 +70,99 @@ def test_run_pipeline_reprocesses_low_confidence_and_upgrades_status(tmp_path):
     assert "paddle_print_crop" in line.candidates  # 보정 없는 재크롭 시도도 남는다.
 
 
+class FixedTesseractStub(OCREngine):
+    """호출할 때마다 항상 같은 결과를 돌려주는 단순 스텁 (Tesseract 대역)."""
+
+    def __init__(self, item):
+        self._item = item
+
+    def recognize(self, image):
+        return [self._item] if self._item is not None else []
+
+
+def test_run_pipeline_cross_check_auto_confirms_when_engines_agree(tmp_path):
+    img_path = tmp_path / "sample.png"
+    Image.new("RGB", (200, 100), "white").save(img_path)
+
+    paddle_item = RecognizedItem(
+        text="hello", confidence=0.4, polygon=[[10, 10], [60, 10], [60, 30], [10, 30]]
+    )
+    paddle_engine = FakeOCREngine([paddle_item], reprocess_item=paddle_item)
+    tesseract_engine = FixedTesseractStub(
+        RecognizedItem(text="hello", confidence=0.9, polygon=[[0, 0], [1, 0], [1, 1], [0, 1]])
+    )
+
+    doc = run_pipeline(
+        img_path, PipelineConfig(), engine=paddle_engine, tesseract_engine=tesseract_engine
+    )
+
+    line = doc.pages[0].lines[0]
+    assert line.status == "auto_confirmed"
+    assert line.text == "hello"
+    assert line.candidates["tesseract"] == ("hello", 0.9)
+
+
+def test_run_pipeline_cross_check_marks_unreadable_on_partial_mismatch(tmp_path):
+    img_path = tmp_path / "sample.png"
+    Image.new("RGB", (200, 100), "white").save(img_path)
+
+    paddle_item = RecognizedItem(
+        text="hollo", confidence=0.4, polygon=[[10, 10], [60, 10], [60, 30], [10, 30]]
+    )
+    paddle_engine = FakeOCREngine([paddle_item], reprocess_item=paddle_item)
+    tesseract_engine = FixedTesseractStub(
+        RecognizedItem(text="hello", confidence=0.9, polygon=[[0, 0], [1, 0], [1, 1], [0, 1]])
+    )
+
+    doc = run_pipeline(
+        img_path, PipelineConfig(), engine=paddle_engine, tesseract_engine=tesseract_engine
+    )
+
+    line = doc.pages[0].lines[0]
+    assert line.status == "unreadable"
+    assert "[판독 불가]" in line.text
+
+
+def test_run_pipeline_cross_check_review_required_on_disagreement(tmp_path):
+    img_path = tmp_path / "sample.png"
+    Image.new("RGB", (200, 100), "white").save(img_path)
+
+    paddle_item = RecognizedItem(
+        text="hello", confidence=0.4, polygon=[[10, 10], [60, 10], [60, 30], [10, 30]]
+    )
+    paddle_engine = FakeOCREngine([paddle_item], reprocess_item=paddle_item)
+    tesseract_engine = FixedTesseractStub(
+        RecognizedItem(
+            text="completely different sentence",
+            confidence=0.9,
+            polygon=[[0, 0], [1, 0], [1, 1], [0, 1]],
+        )
+    )
+
+    doc = run_pipeline(
+        img_path, PipelineConfig(), engine=paddle_engine, tesseract_engine=tesseract_engine
+    )
+
+    line = doc.pages[0].lines[0]
+    assert line.status == "review_required"
+    assert line.text == "hello"  # 최선의 추정값(Paddle)을 그대로 보존한다
+
+
+def test_run_pipeline_without_tesseract_engine_skips_stage3(tmp_path):
+    img_path = tmp_path / "sample.png"
+    Image.new("RGB", (200, 100), "white").save(img_path)
+
+    paddle_item = RecognizedItem(
+        text="hello", confidence=0.4, polygon=[[10, 10], [60, 10], [60, 30], [10, 30]]
+    )
+    paddle_engine = FakeOCREngine([paddle_item], reprocess_item=paddle_item)
+
+    doc = run_pipeline(img_path, PipelineConfig(), engine=paddle_engine, tesseract_engine=None)
+
+    line = doc.pages[0].lines[0]
+    assert "tesseract" not in line.candidates
+
+
 def test_run_pipeline_on_mixed_pdf_combines_text_layer_and_ocr(tmp_path):
     img_src = tmp_path / "embedded.png"
     Image.new("RGB", (100, 40), "white").save(img_src)

@@ -10,9 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-# 문서 "신뢰도와 판독 불가 정책" 표의 상태값. Stage 1은 단일 모델(Paddle)만
-# 사용하므로 "판독 불가"·"재처리"는 아직 산출하지 않는다 (Stage 3에서 추가).
-Status = Literal["auto_confirmed", "review_required", "low_confidence"]
+# 문서 "신뢰도와 판독 불가 정책" 표의 상태값.
+# - auto_confirmed: Stage 1 단일 모델 고신뢰 결과, 또는 Stage 3에서 Paddle과
+#   Tesseract가 완전히 일치해 교차 확정된 결과.
+# - review_required: 후보가 2개 이상이고 근거가 비슷해 사람 확인이 필요한 경우.
+# - low_confidence: 재판독·교차 판독으로도 더 확신을 높이지 못한 단일 결과.
+# - unreadable: Paddle·Tesseract 결과 일부가 끝내 일치하지 않아 그 구간만
+#   UNREADABLE_MARKER로 대체된 경우 ("잘림·번짐·겹침" 정책에 대응).
+Status = Literal["auto_confirmed", "review_required", "low_confidence", "unreadable"]
+
+# 문서 "신뢰도와 판독 불가 정책" 예시("홍[판독 불가]동")에 쓰인 표시.
+UNREADABLE_MARKER = "[판독 불가]"
 
 
 @dataclass(frozen=True)
