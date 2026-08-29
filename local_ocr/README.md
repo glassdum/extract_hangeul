@@ -6,7 +6,7 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
 따른다 (`TECHNICAL DEVELOPMENT PLAN — CPU 기반 완전 로컬 범용 OCR 프로그램
 개발 계획서`).
 
-## 현재 구현 범위 (Stage 1~3 코드 + Stage 4 학습 스캐폴딩)
+## 현재 구현 범위 (Stage 1~3, 5, 6 코드 + Stage 4 학습 스캐폴딩)
 
 - 입력 판별: PDF vs 이미지, PDF의 텍스트 레이어 유무 판별
 - PDF: 텍스트 레이어 직접 추출(bbox 포함) + 혼합 PDF의 임베디드 이미지
@@ -18,6 +18,11 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
   PP-OCRv5_mobile_det + `korean_PP-OCRv5_mobile_rec`)
 - 읽기 순서 정렬(위→아래, 왼쪽→오른쪽) 후 줄바꿈을 공백 하나로 연결,
   연속 공백 정규화, Unicode NFC 정규화
+- **Stage 5**: 같은 행에서 인접한 두 검출 박스는 픽셀 간격을 평균 글자
+  폭과 비교해, 간격이 아주 좁으면(검출기가 한 단어를 둘로 쪼갠 경우) 공백
+  없이 붙이고 그렇지 않으면 공백을 넣는다(`spacing.gap_analysis`). 문자
+  단위 컬럼 좌표까지 내려가는 방법은 모델 구조에 의존하는 비공개
+  구현이라 채택하지 않았다 — 자세한 이유는 그 모듈의 docstring 참고.
 - **Stage 2**: confidence가 낮은 Crop만 골라 Deskew·CLAHE/Contrast
   Stretch·Denoise·Otsu 이진화·2배 확대·반전 등 여러 전처리 보정본을
   만들고, 같은 PaddleOCR 엔진으로 재인식해 confidence가 가장 높은 후보를
@@ -43,14 +48,23 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
   `recognition.handwriting_engine.HandwritingEngine`이 바로 쓸 수 있게
   인터페이스도 준비해 뒀지만, 실제 가중치가 없어 `app.py` 파이프라인에는
   아직 연결하지 않았다.
+- **Stage 6**: PySide6 검토 화면(`python -m review <json>`). 검토가
+  필요한 줄만 목록으로 보여주고, 선택하면 원본 파일에서 그 줄의 bbox를
+  다시 잘라 Crop 이미지로 보여주며, 후보(Paddle 변형들 + Tesseract)를
+  더블클릭하면 텍스트 칸에 채워진다. "적용"으로 확정하거나 "판독 불가로
+  표시"로 마킹할 수 있고, "저장"하면 JSON·TXT를 갱신하면서 수정 이력을
+  SQLite(`storage.history`)에 남긴다. 실제로 오프스크린(headless) Qt로
+  화면을 렌더링해 스크린샷까지 확인했다 — 로직뿐 아니라 레이아웃도
+  검증됐다. `ReviewSession.export_correction_to_manifest()`로 사용자가
+  고친 Crop+정답을 Stage 4 `prepare_dataset.py`가 바로 읽는 manifest
+  형식으로 내보낼 수도 있다 (문서 "학습 데이터": "사용자가 수정한 Crop
+  이미지와 정답 문자열").
 
 ### 아직 없음 (다음 단계)
 
 | 단계 | 내용 |
 | --- | --- |
 | 4 (계속) | 실제 AI Hub 데이터로 학습 실행 + `app.py` 앙상블에 연결 (사용자가 GPU 환경에서 직접) |
-| 5 | Bounding Box 간격 기반 정밀 띄어쓰기 판정 |
-| 6 | PySide6 검토 GUI (원본 Crop·후보·수정·판독 불가 처리) |
 | 7 | ONNX Runtime 변환(엔진 자체), Hash 캐시, Batch/Thread 튜닝 |
 | 8 | Windows 오프라인 배포 패키징 |
 
@@ -68,6 +82,9 @@ Tesseract osd를 이용한 "방향 충돌 시 페이지 방향 교차 확인"도
   설치본에 언어 데이터를 포함해 함께 배포한다 — 문서 "초기 Python
   패키지 계획"). 설치돼 있지 않으면 `--no-cross-check`로 Stage 2까지만
   실행할 수 있다.
+- 리눅스에서 PySide6(Stage 6 검토 화면)를 쓰려면 Qt가 링크하는 시스템
+  라이브러리도 필요하다: `apt install libegl1 libgl1 libxkbcommon0
+  libxcb-cursor0`. Windows/macOS는 해당 없음.
 - 나머지 의존성은 `pyproject.toml` 참고. 실제 통합 테스트에 쓰인 버전은
   `requirements.lock`에 고정돼 있다.
 
@@ -81,6 +98,10 @@ pip install -r requirements.lock
 python app.py path/to/input.pdf --output-dir output
 python app.py path/to/images_folder --output-dir output --dpi 300 --mode accuracy
 python app.py path/to/input.pdf --output-dir output --no-cross-check  # Tesseract 미설치 시
+
+# 검토가 필요한 줄(review_required/low_confidence/unreadable)이 있으면:
+python review_app.py output/input.json
+python review_app.py output/input.json --history-db output/history.sqlite3
 ```
 
 첫 실행 시 PaddleOCR가 모델 가중치를 huggingface.co / bcebos.com /
@@ -106,7 +127,8 @@ PaddleOCR 모델 다운로드·추론은 여기서 실행해보지 못했다.** 
 
 ```
 local_ocr/
-├─ app.py                # CLI 진입점 (Stage 1 파이프라인 조립)
+├─ app.py                # CLI 진입점 (OCR 파이프라인 조립)
+├─ review_app.py         # 검토 GUI 진입점 (Stage 6)
 ├─ pyproject.toml
 ├─ requirements.lock
 ├─ src/
@@ -115,9 +137,9 @@ local_ocr/
 │  ├─ detection/        # (아직 비어 있음 — 정밀 검출기 단독 제어용, 필요해지면 채움)
 │  ├─ recognition/      # PaddleOCR 엔진 + Tesseract 교차 판독 엔진 + 손글씨 엔진(가중치 없이는 비활성)
 │  ├─ ensemble/         # Crop별 전처리 보정본 재판독(Stage 2) + Paddle-Tesseract 교차 판정(Stage 3)
-│  ├─ spacing/          # 읽기 순서 정렬 + 줄 연결
-│  ├─ review/           # (Stage 6에서 채워짐, PySide6)
-│  ├─ storage/          # TXT·JSON 저장
+│  ├─ spacing/          # 읽기 순서 정렬 + 줄 연결 + Bounding Box 간격 기반 띄어쓰기(Stage 5)
+│  ├─ review/           # PySide6 검토 화면 (Stage 6): session(로직) + main_window(UI)
+│  ├─ storage/          # TXT·JSON 저장 + 수정 이력 SQLite
 │  └─ common/           # 설정, 공용 타입, confidence 근사 로직
 ├─ resources/
 │  ├─ models/ tessdata/ licenses/  # 자산은 Git에 커밋하지 않음
