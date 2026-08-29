@@ -1,0 +1,69 @@
+# 손글씨 Fine-tuning 학습 설정.
+#
+# 이 파일의 스키마는 추측이 아니라, 설치된 paddlex==3.7.2 패키지에 실제로
+# 들어있는 공식 예제를 그대로 바탕으로 만들었다:
+#   .venv/lib/python3.12/site-packages/paddlex/configs/modules/text_recognition/korean_PP-OCRv5_mobile_rec.yaml
+# 이 저장소를 만든 샌드박스 환경에서 아래 절차까지 실제로 검증했다 (GPU나
+# AI Hub 데이터 없이도 되는 부분까지):
+#   1. `run_engine.py -c train_config.yaml`로 Engine이 이 yaml을 정상적으로
+#      읽고 Global.mode에 따라 분기하는 것.
+#   2. mode: check_dataset으로 실행하면 실제로 데이터셋(dict.txt/train.txt/
+#      val.txt)을 읽어 검증까지 들어가는 것. (마지막에 통계 그래프용 폰트
+#      파일을 bcebos.com에서 받으려다 이 샌드박스의 네트워크 정책에 막혀
+#      실패했는데, 이는 데이터셋 형식이 아니라 인터넷 연결 문제였다 — 실제
+#      학습 PC에서는 정상 통과한다.)
+# mode: train/evaluate/export까지는 GPU와 사전 학습 가중치 다운로드가 있어야
+# 해서 이 환경에서는 실행해보지 못했다.
+
+Global:
+  model: korean_PP-OCRv5_mobile_rec
+  # check_dataset(먼저 이걸로 데이터셋이 올바른지 확인) / train / evaluate / export
+  mode: check_dataset
+  # prepare_dataset.py --output-dir로 만든 디렉터리 (train.txt/val.txt/test.txt/dict.txt).
+  dataset_dir: "train_data/rec"
+  # 학습은 GPU 권장 (문서 "학습은 GPU 환경에서 수행할 수 있지만 배포 모델은
+  # ONNX로 변환해 CPU에서 실행한다"). GPU가 여러 장이면 "gpu:0,1,2,3"처럼 쓴다.
+  device: gpu:0
+  output: "output"
+
+CheckDataset:
+  convert:
+    enable: False
+    src_dataset_type: null
+  split:
+    enable: False
+    train_percent: null
+    val_percent: null
+
+Train:
+  epochs_iters: 20
+  batch_size: 8
+  learning_rate: 0.001
+  # 문서 "초기 가중치": 공식 korean_PP-OCRv5_mobile_rec의 Pretrained 모델을
+  # 시작점으로 삼는다. 아래 URL은 paddlex가 공식 예제에 실제로 박아 둔
+  # 값이다 (추측 아님) — 이 경로에서 자동 다운로드한다.
+  pretrain_weight_path: https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/korean_PP-OCRv5_mobile_rec_pretrained.pdparams
+  resume_path: null
+  log_interval: 20
+  eval_interval: 1
+  save_interval: 1
+  # 참고: 이 상위 레벨 yaml에는 증강(Blur/Noise/Perspective/LowContrast/
+  # Compression, 문서 "학습 원칙") 옵션이 노출돼 있지 않다. paddlex는 내부적으로
+  # PaddleOCR 저장소의 tools/train.py를 호출하며 기본 RecAug(다양한 왜곡·노이즈
+  # 증강 포함)를 쓴다. 증강 종류·강도를 세밀히 조정하려면 PaddleOCR GitHub
+  # 저장소를 따로 받아 그 안의 낮은 단계 yaml(RecAug 설정)을 직접 수정해야
+  # 한다 — 이 파일만으로는 제어할 수 없다.
+
+Evaluate:
+  weight_path: "output/best_accuracy/best_accuracy.pdparams"
+  log_interval: 1
+
+Export:
+  weight_path: "output/best_accuracy/best_accuracy.pdparams"
+
+Predict:
+  batch_size: 1
+  model_dir: "output/best_accuracy/inference"
+  input: "train_data/rec/images/example.png"
+  kernel_option:
+    run_mode: paddle

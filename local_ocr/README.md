@@ -6,7 +6,7 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
 따른다 (`TECHNICAL DEVELOPMENT PLAN — CPU 기반 완전 로컬 범용 OCR 프로그램
 개발 계획서`).
 
-## 현재 구현 범위 (Stage 1~3: 입력·기본 OCR, 전처리 탐색, 교차 판독)
+## 현재 구현 범위 (Stage 1~3 코드 + Stage 4 학습 스캐폴딩)
 
 - 입력 판별: PDF vs 이미지, PDF의 텍스트 레이어 유무 판별
 - PDF: 텍스트 레이어 직접 추출(bbox 포함) + 혼합 PDF의 임베디드 이미지
@@ -31,15 +31,27 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
   Paddle-Tesseract 일치로 근사한다. 시도한 모든 후보(Paddle 변형들 +
   Tesseract)는 JSON의 `candidates`에 그대로 남는다.
 - TXT(최종 문자열)·JSON(페이지·bbox·후보·상태) 저장
+- **Stage 4 (스캐폴딩만)**: 한국어 손글씨 Fine-tuning은 AI Hub 데이터
+  신청·다운로드와 GPU 학습이 필요해 이 저장소를 만든 환경에서는 실제 학습을
+  실행할 수 없다. 대신 `resources/handwriting_training/`에 데이터 준비
+  (`prepare_dataset.py`, 작성자 단위 train/val/test 분리) → 학습
+  (`run_engine.py` + `train_config.yaml`, 공식 사전 학습 가중치에서
+  시작) → 평가(`evaluate.py`, CER/Exact Match) → ONNX 변환
+  (`export_to_onnx.py`)까지 이어지는 실행 가능한 스크립트를 준비해 뒀고,
+  GPU·AI Hub 데이터 없이 검증 가능한 부분(데이터셋 형식, CLI 배선)은 실제로
+  돌려서 확인했다 — 자세한 내용은 그 폴더의 README 참고. 학습된 가중치를
+  `recognition.handwriting_engine.HandwritingEngine`이 바로 쓸 수 있게
+  인터페이스도 준비해 뒀지만, 실제 가중치가 없어 `app.py` 파이프라인에는
+  아직 연결하지 않았다.
 
 ### 아직 없음 (다음 단계)
 
 | 단계 | 내용 |
 | --- | --- |
-| 4 | 한국어 손글씨 Fine-tuning 모델(`korean_PP-OCRv5_mobile_rec_handwriting_ft`) |
+| 4 (계속) | 실제 AI Hub 데이터로 학습 실행 + `app.py` 앙상블에 연결 (사용자가 GPU 환경에서 직접) |
 | 5 | Bounding Box 간격 기반 정밀 띄어쓰기 판정 |
 | 6 | PySide6 검토 GUI (원본 Crop·후보·수정·판독 불가 처리) |
-| 7 | ONNX Runtime 변환, Hash 캐시, Batch/Thread 튜닝 |
+| 7 | ONNX Runtime 변환(엔진 자체), Hash 캐시, Batch/Thread 튜닝 |
 | 8 | Windows 오프라인 배포 패키징 |
 
 Perspective Transform(문서 펴기, UVDoc)은 아직 구현하지 않았고, 표 선
@@ -101,13 +113,15 @@ local_ocr/
 │  ├─ input/            # PDF·이미지 로딩
 │  ├─ preprocess/       # 정규화 + 전처리 보정본 생성 (Deskew/CLAHE/이진화/확대/반전 등)
 │  ├─ detection/        # (아직 비어 있음 — 정밀 검출기 단독 제어용, 필요해지면 채움)
-│  ├─ recognition/      # PaddleOCR 엔진 + Tesseract 교차 판독 엔진
+│  ├─ recognition/      # PaddleOCR 엔진 + Tesseract 교차 판독 엔진 + 손글씨 엔진(가중치 없이는 비활성)
 │  ├─ ensemble/         # Crop별 전처리 보정본 재판독(Stage 2) + Paddle-Tesseract 교차 판정(Stage 3)
 │  ├─ spacing/          # 읽기 순서 정렬 + 줄 연결
 │  ├─ review/           # (Stage 6에서 채워짐, PySide6)
 │  ├─ storage/          # TXT·JSON 저장
 │  └─ common/           # 설정, 공용 타입, confidence 근사 로직
-├─ resources/           # models/ tessdata/ licenses/ (자산은 Git에 커밋하지 않음)
+├─ resources/
+│  ├─ models/ tessdata/ licenses/  # 자산은 Git에 커밋하지 않음
+│  └─ handwriting_training/        # Stage 4 데이터 준비·학습·평가·ONNX 변환 스크립트
 ├─ tests/
 └─ build/
 ```
