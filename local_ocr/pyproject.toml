@@ -1,0 +1,31 @@
+[project]
+name = "local-ocr"
+version = "0.1.0"
+description = "CPU 기반 완전 로컬 범용 OCR 프로그램 (인쇄체·손글씨, 한글/영어/숫자)"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+
+# 문서 "초기 Python 패키지 계획" 표를 그대로 반영한 전체 프로젝트 의존성.
+# Stage 1(입력·기본 OCR)은 이 중 paddleocr/paddlepaddle/PyMuPDF/Pillow/
+# pillow-heif/opencv-python만 실제로 사용한다. onnxruntime(배포 추론),
+# PySide6(검토 GUI), pytesseract(교차 판독)는 이후 단계에서 코드가 붙는다.
+# 정확한 고정 버전은 requirements.lock을 따른다 (문서 "버전 정책").
+dependencies = [
+    "paddleocr==3.7.0",
+    "paddlepaddle==3.3.1",
+    "onnxruntime==1.29.0",
+    "opencv-python==4.14.0.94",
+    "PyMuPDF==1.28.2",
+    "PySide6==6.11.2",
+    "Pillow>=11,<13",
+    "pillow-heif>=0.20",
+    "pytesseract>=0.3.13",
+    "rapidfuzz>=3.10",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]

@@ -1,0 +1,20 @@
+# Stage 1(입력·기본 OCR) 통합 테스트에 실제로 사용해 검증한 고정 버전.
+# 생성: python3.12 -m venv .venv && pip install -r requirements.lock 로 재현.
+#
+# 문서 "초기 Python 패키지 계획"에 있지만 Stage 1 코드가 아직 쓰지 않는
+# onnxruntime(배포 추론), PySide6(검토 GUI), pytesseract(교차 판독)는
+# 여기 포함하지 않았다 — 해당 단계 구현 시 이 파일도 함께 갱신한다.
+#
+# 참고: opencv-contrib-python은 paddleocr/paddlex의 전이 의존성으로 자동
+# 설치된 것이며, pyproject.toml에 명시한 opencv-python 대신 이것이 깔린다
+# (둘 다 `cv2` 모듈을 제공하므로 기능상 문제는 없다).
+
+PyMuPDF==1.28.2
+Pillow==12.3.0
+pillow_heif==1.5.0
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+paddlex==3.7.2
+numpy==2.3.5
+opencv-contrib-python==4.10.0.84
+pytest==9.1.1

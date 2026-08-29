@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+local_ocr/.venv/
+local_ocr/output/
+local_ocr/build/*
+!local_ocr/build/.gitkeep
+local_ocr/resources/models/**/*.onnx
+local_ocr/resources/models/**/*.pdiparams
+local_ocr/resources/tessdata/*.traineddata
+.pytest_cache/
+*.egg-info/
