@@ -10,6 +10,16 @@ PaddleOCR 3.x의 `PaddleOCR` 클래스는 문서 방향 분류(PP-LCNet doc_ori)
 오프라인 배포판(문서 "1차 완성 기준": 외부 서버와 통신하지 않고 모델 파일을
 로컬에서만 로딩)을 만들려면 이 캐시를 `resources/models/`로 옮겨 넣고
 로컬 경로를 가리키도록 설정하는 작업이 Stage 8(Windows 배포)에서 필요하다.
+
+CPU 최적화(문서 "CPU 성능 최적화") 관련 옵션 두 가지도 여기서 그대로
+전달한다:
+- `cpu_threads`: 실제 코어 수 기반 값(`common.cpu.recommended_thread_count`)을
+  기본으로 쓴다. 설치된 패키지 자체의 기본값(10, 고정)과 다르다.
+- `engine="onnxruntime"`: 설치된 paddleocr의
+  `_common_args.SUPPORTED_INFERENCE_ENGINE_LIST`에 실제로 있는 값을 그대로
+  연결했다. 다만 onnx 형식 모델과 onnxruntime 패키지가 있어야 동작하고,
+  이 저장소를 만든 환경은 그 모델을 받을 수 없어 실제 추론 검증은
+  못 했다 — 기본값은 여전히 "paddle"이다.
 """
 
 from __future__ import annotations
@@ -32,32 +42,39 @@ class PaddleOCREngine(OCREngine):
             use_doc_unwarping=config.use_doc_unwarping,
             use_textline_orientation=config.use_textline_orientation,
             device="gpu" if config.use_gpu else "cpu",
+            cpu_threads=config.cpu_threads,
+            engine=config.inference_backend,
         )
-        if config.cpu_threads:
-            kwargs["cpu_threads"] = config.cpu_threads
 
         self._ocr = PaddleOCR(**kwargs)
 
     def recognize(self, image: np.ndarray) -> list[RecognizedItem]:
-        items: list[RecognizedItem] = []
-        for res in self._ocr.predict(image):
-            texts = res.get("rec_texts") or []
-            scores = res.get("rec_scores") or []
-            polys = res.get("rec_polys")
-            if polys is None:
-                polys = res.get("rec_boxes") or []
+        return self.recognize_batch([image])[0]
 
-            for text, score, poly in zip(texts, scores, polys):
-                if not text:
-                    continue
-                items.append(
-                    RecognizedItem(
-                        text=text,
-                        confidence=float(score),
-                        polygon=_to_quad(poly),
-                    )
-                )
-        return items
+    def recognize_batch(self, images: list[np.ndarray]) -> list[list[RecognizedItem]]:
+        """`PaddleOCR.predict()`는 ndarray 리스트를 입력으로 받아 한 번의 호출로
+        여러 장을 처리하고, 이미지 하나당 결과 하나를 순서대로 낸다 (설치된
+        paddlex 소스의 `OCRPipeline.predict()` 타입 힌트/문서화에서 확인:
+        `input: Union[str, List[str], np.ndarray, List[np.ndarray]]`)."""
+        if not images:
+            return []
+        results = list(self._ocr.predict(images))
+        return [_parse_result(res) for res in results]
+
+
+def _parse_result(res) -> list[RecognizedItem]:
+    texts = res.get("rec_texts") or []
+    scores = res.get("rec_scores") or []
+    polys = res.get("rec_polys")
+    if polys is None:
+        polys = res.get("rec_boxes") or []
+
+    items: list[RecognizedItem] = []
+    for text, score, poly in zip(texts, scores, polys):
+        if not text:
+            continue
+        items.append(RecognizedItem(text=text, confidence=float(score), polygon=_to_quad(poly)))
+    return items
 
 
 def _to_quad(poly) -> list[list[float]]:

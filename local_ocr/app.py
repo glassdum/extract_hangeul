@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""CPU 기반 완전 로컬 OCR 프로그램 - Stage 1~3 CLI 진입점.
+"""CPU 기반 완전 로컬 OCR 프로그램 - Stage 1~3, 7 CLI 진입점.
 
 파일 로딩, PDF 텍스트 레이어 판별, 문서/줄 방향 보정(PaddleOCR 내장), 기본
 한국어 인식(Stage 1), 불확실한 Crop의 전처리 보정본 재판독(Stage 2), Paddle
 과 Tesseract 교차 판독을 통한 자동 확정/사용자 확인/판독 불가 판정(Stage 3)
-까지 수행해 TXT·JSON 결과를 생성한다. 손글씨 Fine-tuning, 검토 GUI, Windows
-패키징은 이후 단계(Stage 4~8)에서 추가된다.
+까지 수행해 TXT·JSON 결과를 생성한다. 엔진 호출은 실제 코어 수 기반 스레드
+제한과 해시 캐시로 감싸(Stage 7) 같은 Crop을 다시 계산하지 않는다. 손글씨
+Fine-tuning은 스캐폴딩만 있고(Stage 4), Windows 패키징(Stage 8)은 아직이다.
 
 Usage:
     python app.py <input-file-or-dir> [--output-dir output] [--dpi 300]
-                  [--mode accuracy|speed] [--lang korean] [--no-cross-check]
+                  [--mode accuracy|speed] [--lang korean]
+                  [--no-cross-check] [--no-cache]
 """
 
 from __future__ import annotations
@@ -36,9 +38,11 @@ from input.loader import load_document  # noqa: E402
 from preprocess.convert import to_bgr_ndarray  # noqa: E402
 from preprocess.crop import crop_with_padding  # noqa: E402
 from recognition.base import OCREngine  # noqa: E402
+from recognition.caching_engine import CachingEngine  # noqa: E402
 from recognition.paddle_engine import PaddleOCREngine  # noqa: E402
 from recognition.tesseract_engine import TesseractEngine  # noqa: E402
 from spacing.reading_order import join_text  # noqa: E402
+from storage.cache import ResultCache  # noqa: E402
 from storage.writer import save_json, save_txt  # noqa: E402
 
 SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_PDF_EXTENSIONS
@@ -47,7 +51,7 @@ SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_PDF_EXTENSIONS
 def run_pipeline(
     path: str | Path,
     config: PipelineConfig,
-    engine: PaddleOCREngine,
+    engine: OCREngine,
     tesseract_engine: OCREngine | None = None,
 ) -> DocumentResult:
     """문서 "처리 파이프라인" 1~9, 11~12번 항목: 로딩, 기본 인식, 불확실한 Crop
@@ -107,7 +111,7 @@ def _build_text_line(
     region_image: Image.Image,
     text: str,
     confidence: float,
-    engine: PaddleOCREngine,
+    engine: OCREngine,
     tesseract_engine: OCREngine | None,
     config: PipelineConfig,
 ) -> TextLine:
@@ -207,6 +211,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stage 3 Tesseract 교차 판독을 건너뛴다 (Tesseract 미설치 환경 등).",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Stage 7 결과 캐시(Hash 기반 재계산 방지)를 끈다.",
+    )
     return parser
 
 
@@ -219,16 +228,27 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     config = PipelineConfig(
-        mode=args.mode, lang=args.lang, dpi=args.dpi, enable_cross_check=not args.no_cross_check
+        mode=args.mode,
+        lang=args.lang,
+        dpi=args.dpi,
+        enable_cross_check=not args.no_cross_check,
+        enable_cache=not args.no_cache,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     print("PaddleOCR 엔진 초기화 중 (최초 실행 시 모델 다운로드로 시간이 걸릴 수 있습니다)...")
-    engine = PaddleOCREngine(config)
+    engine: OCREngine = PaddleOCREngine(config)
 
     tesseract_engine: OCREngine | None = None
     if config.enable_cross_check:
         tesseract_engine = TesseractEngine(lang=config.tesseract_lang, dpi=config.dpi)
+
+    if config.enable_cache:
+        cache_path = config.cache_path or (args.output_dir / ".cache" / "ocr_cache.sqlite3")
+        cache = ResultCache(cache_path)
+        engine = CachingEngine(engine, cache, namespace="paddle")
+        if tesseract_engine is not None:
+            tesseract_engine = CachingEngine(tesseract_engine, cache, namespace="tesseract")
 
     for input_path in inputs:
         start = time.monotonic()

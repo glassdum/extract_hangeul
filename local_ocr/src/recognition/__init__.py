@@ -6,9 +6,13 @@
 아직 없고(`resources/handwriting_training/README.md` 참고), 없는 상태로
 생성하면 `HandwritingModelNotAvailableError`를 던진다. 세 엔진 모두 같은
 `OCREngine` 인터페이스를 구현해 `ensemble`이 결과를 동일하게 다룰 수 있다.
+
+`CachingEngine`은 어떤 `OCREngine`이든 감싸 결과를 해시 기반으로 캐싱한다
+(문서 "CPU 성능 최적화").
 """
 
 from .base import OCREngine, RecognizedItem
+from .caching_engine import CachingEngine
 from .handwriting_engine import HandwritingEngine, HandwritingModelNotAvailableError
 from .paddle_engine import PaddleOCREngine
 from .tesseract_engine import TesseractEngine
@@ -20,4 +24,5 @@ __all__ = [
     "TesseractEngine",
     "HandwritingEngine",
     "HandwritingModelNotAvailableError",
+    "CachingEngine",
 ]
