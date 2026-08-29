@@ -6,7 +6,7 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
 따른다 (`TECHNICAL DEVELOPMENT PLAN — CPU 기반 완전 로컬 범용 OCR 프로그램
 개발 계획서`).
 
-## 현재 구현 범위 (Stage 1: 입력·기본 OCR)
+## 현재 구현 범위 (Stage 1~2: 입력·기본 OCR, 전처리 탐색)
 
 - 입력 판별: PDF vs 이미지, PDF의 텍스트 레이어 유무 판별
 - PDF: 텍스트 레이어 직접 추출(bbox 포함) + 혼합 PDF의 임베디드 이미지
@@ -20,19 +20,27 @@ CPU 기반 완전 로컬 범용 OCR 프로그램. 이미지·PDF에서 한글·�
   연속 공백 정규화, Unicode NFC 정규화
 - confidence 임계값 기반 상태 근사치(`auto_confirmed` /
   `review_required` / `low_confidence`) — 진짜 앙상블 판정 이전의 잠정치
+- **Stage 2**: confidence가 낮은 Crop만 골라 Deskew·CLAHE/Contrast
+  Stretch·Denoise·Otsu 이진화·2배 확대·반전 등 여러 전처리 보정본을
+  만들고, 같은 PaddleOCR 엔진으로 재인식해 confidence가 가장 높은 후보를
+  채택한다(`preprocess.variants` + `ensemble.reprocess`). 시도한 모든
+  후보는 JSON의 `candidates`에 그대로 남는다.
 - TXT(최종 문자열)·JSON(페이지·bbox·후보·상태) 저장
 
 ### 아직 없음 (다음 단계)
 
 | 단계 | 내용 |
 | --- | --- |
-| 2 | Deskew·Perspective·CLAHE·이진화 등 Crop별 다중 전처리 비교 |
-| 3 | 인쇄체/손글씨/Tesseract 결과 교차 비교, 진짜 "판독 불가" 판정 |
+| 3 | 인쇄체/손글씨/Tesseract **엔진 간** 결과 교차 비교, 진짜 "판독 불가" 판정 |
 | 4 | 한국어 손글씨 Fine-tuning 모델(`korean_PP-OCRv5_mobile_rec_handwriting_ft`) |
 | 5 | Bounding Box 간격 기반 정밀 띄어쓰기 판정 |
 | 6 | PySide6 검토 GUI (원본 Crop·후보·수정·판독 불가 처리) |
 | 7 | ONNX Runtime 변환, Hash 캐시, Batch/Thread 튜닝 |
 | 8 | Windows 오프라인 배포 패키징 |
+
+Perspective Transform(문서 펴기, UVDoc)은 아직 구현하지 않았고, 표 선
+제거(`preprocess.lines.remove_table_lines`)는 함수만 있고 기본 보정본
+목록에는 자동으로 포함하지 않는다 (`src/preprocess/__init__.py` 참고).
 
 ## 요구사항
 
@@ -71,10 +79,10 @@ local_ocr/
 ├─ requirements.lock
 ├─ src/
 │  ├─ input/            # PDF·이미지 로딩
-│  ├─ preprocess/       # 정규화 (기하/명암 보정은 Stage 2)
-│  ├─ detection/        # (Stage 2/3에서 채워짐)
+│  ├─ preprocess/       # 정규화 + 전처리 보정본 생성 (Deskew/CLAHE/이진화/확대/반전 등)
+│  ├─ detection/        # (Stage 3에서 채워짐)
 │  ├─ recognition/      # PaddleOCR 엔진 래퍼
-│  ├─ ensemble/         # (Stage 3에서 채워짐)
+│  ├─ ensemble/         # Crop별 전처리 보정본 재판독·최적 후보 선택 (엔진 간 비교는 Stage 3)
 │  ├─ spacing/          # 읽기 순서 정렬 + 줄 연결
 │  ├─ review/           # (Stage 6에서 채워짐, PySide6)
 │  ├─ storage/          # TXT·JSON 저장

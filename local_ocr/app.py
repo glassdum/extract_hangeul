@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from PIL import Image
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from common.config import (  # noqa: E402
@@ -27,8 +29,10 @@ from common.config import (  # noqa: E402
 )
 from common.confidence import classify_status  # noqa: E402
 from common.types import BBox, DocumentResult, PageResult, TextLine  # noqa: E402
+from ensemble.reprocess import pick_best, reprocess_crop  # noqa: E402
 from input.loader import load_document  # noqa: E402
 from preprocess.convert import to_bgr_ndarray  # noqa: E402
+from preprocess.crop import crop_with_padding  # noqa: E402
 from recognition.paddle_engine import PaddleOCREngine  # noqa: E402
 from spacing.reading_order import join_text  # noqa: E402
 from storage.writer import save_json, save_txt  # noqa: E402
@@ -39,9 +43,9 @@ SUPPORTED_EXTENSIONS = SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_PDF_EXTENSIONS
 def run_pipeline(
     path: str | Path, config: PipelineConfig, engine: PaddleOCREngine
 ) -> DocumentResult:
-    """문서 "처리 파이프라인" 1~2, 5~6, 11~12번 항목: 로딩부터 TXT/JSON용
-    DocumentResult 구성까지. (3~4번 기하 보정, 7~10번 앙상블/판독 불가/공간
-    검증은 Stage 2~5에서 추가된다.)
+    """문서 "처리 파이프라인" 1~2, 5~9, 11~12번 항목: 로딩, 기본 인식, 불확실한
+    Crop 재판독(Stage 2)부터 TXT/JSON용 DocumentResult 구성까지. (3~4번 기하
+    보정 조건부 적용, 10번 판독 불가/공간 검증은 Stage 3~5에서 추가된다.)
     """
     loaded_pages = load_document(
         path, dpi=config.dpi, min_text_layer_chars=config.min_text_layer_chars
@@ -63,13 +67,15 @@ def run_pipeline(
                     region.bbox.y0 + local_bbox.y1,
                 )
                 lines.append(
-                    TextLine(
+                    _build_text_line(
                         page=loaded.page,
-                        bbox=page_bbox,
+                        page_bbox=page_bbox,
+                        local_bbox=local_bbox,
+                        region_image=region.image,
                         text=item.text,
                         confidence=item.confidence,
-                        source="paddle_print",
-                        status=classify_status(item.confidence, config),
+                        engine=engine,
+                        config=config,
                     )
                 )
 
@@ -80,6 +86,69 @@ def run_pipeline(
     doc = DocumentResult(source_path=str(path), pages=pages)
     doc.final_text = join_text(doc.all_lines())
     return doc
+
+
+def _build_text_line(
+    *,
+    page: int,
+    page_bbox: BBox,
+    local_bbox: BBox,
+    region_image: Image.Image,
+    text: str,
+    confidence: float,
+    engine: PaddleOCREngine,
+    config: PipelineConfig,
+) -> TextLine:
+    """1차 인식 결과로 TextLine을 만들되, confidence가 낮으면 Stage 2 재판독을 거친다.
+
+    Stage 2 재판독은 1차 인식이 본 전체 영역이 아니라 그 안의 좁은 Crop만 다시
+    보므로, `reprocess_crop`의 "original"(보정 없는 Crop) 결과조차 1차 인식과
+    다른 입력에 대한 새로운 시도다 — 그래서 1차 인식값을 덮어쓰지 않고 별도
+    후보(`paddle_print_crop`)로 남긴다.
+    """
+    base_source = "paddle_print"
+    status = classify_status(confidence, config)
+
+    if status == "auto_confirmed":
+        return TextLine(
+            page=page,
+            bbox=page_bbox,
+            text=text,
+            confidence=confidence,
+            source=base_source,
+            status=status,
+        )
+
+    crop = crop_with_padding(region_image, local_bbox)
+    candidates_list = reprocess_crop(crop, engine)
+
+    candidates: dict[str, tuple[str, float]] = {base_source: (text, round(confidence, 4))}
+    for candidate in candidates_list:
+        if candidate.item is None:
+            continue
+        suffix = "crop" if candidate.variant == "original" else candidate.variant
+        candidates[f"{base_source}_{suffix}"] = (
+            candidate.item.text,
+            round(candidate.item.confidence, 4),
+        )
+
+    source = base_source
+    best = pick_best(candidates_list)
+    if best is not None and best.item.confidence > confidence:
+        text, confidence = best.item.text, best.item.confidence
+        suffix = "crop" if best.variant == "original" else best.variant
+        source = f"{base_source}_{suffix}"
+        status = classify_status(confidence, config)
+
+    return TextLine(
+        page=page,
+        bbox=page_bbox,
+        text=text,
+        confidence=confidence,
+        source=source,
+        status=status,
+        candidates=candidates,
+    )
 
 
 def collect_inputs(path: Path) -> list[Path]:

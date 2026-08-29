@@ -59,8 +59,11 @@ class TextLine:
     bbox: BBox
     text: str
     confidence: float
-    source: str  # "pdf_text" | "paddle_print" 등 (Stage 3에서 후보군으로 확장)
+    source: str  # "pdf_text" | "paddle_print" | "paddle_print_<variant>" 등
     status: Status = "auto_confirmed"
+    # Stage 2 재판독을 거친 경우, 시도한 모든 후보 {candidate_key: (text, confidence)}.
+    # 재판독하지 않은 줄은 비어 있다 — storage.writer가 그 경우 source 하나로 채운다.
+    candidates: dict[str, tuple[str, float]] = field(default_factory=dict)
 
 
 @dataclass

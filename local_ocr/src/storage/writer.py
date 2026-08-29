@@ -32,12 +32,17 @@ def save_json(path: str | Path, doc: DocumentResult) -> None:
 
 
 def _line_to_dict(line: TextLine) -> dict:
+    # Stage 2 재판독을 거친 줄은 시도한 모든 후보를 그대로 남긴다 (문서 JSON 예시의
+    # candidates 형태). 재판독하지 않은 줄은 최종 채택된 하나만 후보로 기록한다.
+    candidates = (
+        {key: [text, confidence] for key, (text, confidence) in line.candidates.items()}
+        if line.candidates
+        else {line.source: [line.text, round(line.confidence, 4)]}
+    )
     return {
         "text": line.text,
         "status": line.status,
         "page": line.page,
         "bbox": line.bbox.as_list(),
-        "candidates": {
-            line.source: [line.text, round(line.confidence, 4)],
-        },
+        "candidates": candidates,
     }
